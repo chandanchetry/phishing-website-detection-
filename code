@@ -1,4 +1,4 @@
-#importing the required libraries
+##importing the required libraries
 import pandas as pd
 import numpy as np
 import re
@@ -8,49 +8,63 @@ from sklearn.model_selection import train_test_split
 import sagemaker
 from sagemaker import get_execution_role
 
+##Downloading the phishing URLs file
 !wget http://data.phishtank.com/data/online-valid.csv
 
+## Download and load the legitimate data to the IDE  from  https://www.unb.ca/cic/datasets/url-2016.html or use !wget command as used above.
+
+##loading the phishing URLs data to dataframe
 data0 = pd.read_csv("online-valid.csv")
 
-data0.head()
-
+##droping the columns that we dont need
 data0.drop(['phish_id','submission_time','phish_detail_url','verified','verification_time','online','target'], axis = 1,inplace=True)
 
-data0['label']='good'
+##setting target variable 
+data0['label']='bad'
 
-phishurl = data0.sample(n = 7000, random_state = 12).copy()
+##Collecting 5,000 Phishing URLs randomly
+phishurl = data0.sample(n = 5000, random_state = 12).copy()
 phishurl = phishurl.reset_index(drop=True)
 phishurl.head()
 
+##Loading legitimate files 
 data1 = pd.read_csv('Benign_list_big_final.csv')
 data1.columns = ['url']
 data1.head()
 
-data1['label']='bad'
+##setting target variable 
+data1['label']='good'
 data1
 
+##Collecting 5,000 Legitimate URLs randomly
 legiurl = data1.sample(n = 5000, random_state = 12).copy()
 legiurl = legiurl.reset_index(drop=True)
 legiurl.head()
 
+##concatenating both the data files into one.
 data = pd.concat([phishurl,legiurl])
 
+##shuffling the data
 data = data.sample(frac=1).reset_index(drop=True)
 data
 
+##making the target variable column as the first coloumn 
 cols = list(data.columns.values) #Make a list of all of the columns in the df
 cols.pop(cols.index('url')) #Remove b from list
 cols.pop(cols.index('label')) #Remove x from list
 data = data[cols+['label','url']] #Create new dataframe with columns in the order you want
 
+##delete files to save memory 
 cols.clear()
 
+##intilizing session object .Session manage interactions with the Amazon SageMaker APIs and any other AWS services needed.
 session = sagemaker.Session()
 
+##getting the IAM role to use s3 bucket
 role = get_execution_role()
 
-# Define tokenizer
-#   The purpose of a tokenizer is to separate the features from the raw data
+##Define tokenizer
+## The purpose of a tokenizer is to separate the features from the raw data
 
 
 def tokenizer(url):
@@ -61,15 +75,15 @@ def tokenizer(url):
   :Returns -- The tokenized words; returned as a list
   """
   
-  # Split by slash (/) and dash (-)
+  ## Split by slash (/) and dash (-)
   tokens = re.split('[/-]', url)
   
   for i in tokens:
-    # Include the splits extensions and subdomains
+    ## Include the splits extensions and subdomains
     if i.find(".") >= 0:
       dot_split = i.split('.')
       
-      # Remove .com and www. since they're too common
+      ## Remove .com and www. since they're too common
       if "com" in dot_split:
         dot_split.remove("com")
       if "www" in dot_split:
@@ -81,49 +95,57 @@ def tokenizer(url):
     
 print("\n### Tokenizer defined ###\n")
 
+##Taking a random URL 
 test_url = data['url'][100]
 print("\n- Full URL -\n")
 print(test_url)
 
-# Tokenize test URL
+## Tokenize test URL
 print("\n- Tokenized Output -\n")
 tokenized_url = tokenizer(test_url)
 print(tokenized_url)
 
-
+##vectorizing our data
 tf_idf = TfidfVectorizer(tokenizer=tokenizer)
 tf_idf_vector  = pd.DataFrame(tf_idf.fit_transform(data['url']).todense())
 data['label'] = label_binarize(data['label'], classes=['good', 'bad'])
 
+##spliting the data using Train/Test split
 X_train, X_test, y_train, y_test = train_test_split(tf_idf_vector, data['label'], test_size=0.3, random_state=0)
 X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=0.3, random_state=0)
 
+##setting up the bucket name and path
 s3_bucket = sagemaker.Session().default_bucket()
 s3_prefix = 'spam-data' #prefix used for data stored within the bucket
 s3_path = 's3://{}/{}/'.format(s3_bucket, s3_prefix)
 
+##creating data directory 
 import os
 data_dir = 'data'
 if not os.path.exists(data_dir):
     os.makedirs(data_dir)
     
 import scipy.sparse
-# scipy.sparse.save_npz(os.path.join(data_dir, 'test_data.csv'), X_test)
+## scipy.sparse.save_npz(os.path.join(data_dir, 'test_data.csv'), X_test)
 X_test.to_csv(os.path.join(data_dir, 'test_data.csv'), header=False, index=False)
 pd.concat([y_train, X_train], axis=1).to_csv(os.path.join(data_dir, 'train_data.csv'), header=False, index=False)
 pd.concat([y_val, X_val], axis=1).to_csv(os.path.join(data_dir, 'val_data.csv'), header=False, index=False)
 
+##uploading test,train and validate into bucket and taking their paths.
 test_path = session.upload_data(os.path.join(data_dir, 'test_data.csv'), key_prefix = s3_prefix)
 train_path = session.upload_data(os.path.join(data_dir, 'train_data.csv'), key_prefix = s3_prefix)
 val_path = session.upload_data(os.path.join(data_dir, 'val_data.csv'), key_prefix = s3_prefix)
 
+##creating XGboost instance
 from sagemaker.amazon.amazon_estimator import get_image_uri
 container = get_image_uri(session.boto_region_name, 'xgboost','1.0-1')
-# container = get_image_uri(boto3.Session().region_name, 'xgboost')
+## container = get_image_uri(boto3.Session().region_name, 'xgboost')
 
+##creating output path
 output_path = s3_path + 'model_output'
 output_path
 
+##initializing hyperparameters 
 hyperparameters ={
 "max_depth": 5,
 "eta": 0.2,
@@ -146,6 +168,7 @@ classifier = sagemaker.estimator.Estimator(
 ## set hyperparameters
 classifier.set_hyperparameters(**hyperparameters)
 
+##fiting the model
 s3_train = sagemaker.s3_input(s3_data=train_path, content_type='csv')
 s3_val = sagemaker.s3_input(s3_data=val_path, content_type='csv')
 classifier.fit({
@@ -153,20 +176,26 @@ classifier.fit({
                'validation':s3_val,
                })
                
-               
+##To test the model that we created, we will use SageMaker's Batch Transform functionality, which will split the test data into batches, send it to the model, and merge the results.            
+## transformer object 
 classifier_transformer = classifier.transformer(instance_count=1, instance_type='ml.m4.xlarge')
-
 classifier_transformer.transform(test_path, content_type='text/csv', split_type='Line')
 
+##SageMaker will run the batch transform job in the background. To get some output on the job performance, use the wait method in the transformer object.
 classifier_transformer.wait()
 
+##The batch transform job saves the output in an S3bucket. To load the output data to a local directory, run the below command.
 !aws s3 cp --recursive $classifier_transformer.output_path $data_dir
+
+##Now, load the predictions and calculate accuracy score.
 predictions = pd.read_csv(os.path.join(data_dir, 'test_data.csv.out'), header=None)
 predictions = [round(num) for num in predictions.squeeze().values]
 
+##calculating accuracy
 from sklearn.metrics import accuracy_score
 accuracy_score(y_test, predictions)
 
+##deploying the model
 xgb_predictor = classifier.deploy(initial_instance_count=1,instance_type='ml.m4.xlarge')
 
 
