@@ -1,0 +1,173 @@
+#importing the required libraries
+import pandas as pd
+import numpy as np
+import re
+from sklearn.preprocessing import label_binarize
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.model_selection import train_test_split
+import sagemaker
+from sagemaker import get_execution_role
+
+!wget http://data.phishtank.com/data/online-valid.csv
+
+data0 = pd.read_csv("online-valid.csv")
+
+data0.head()
+
+data0.drop(['phish_id','submission_time','phish_detail_url','verified','verification_time','online','target'], axis = 1,inplace=True)
+
+data0['label']='good'
+
+phishurl = data0.sample(n = 7000, random_state = 12).copy()
+phishurl = phishurl.reset_index(drop=True)
+phishurl.head()
+
+data1 = pd.read_csv('Benign_list_big_final.csv')
+data1.columns = ['url']
+data1.head()
+
+data1['label']='bad'
+data1
+
+legiurl = data1.sample(n = 5000, random_state = 12).copy()
+legiurl = legiurl.reset_index(drop=True)
+legiurl.head()
+
+data = pd.concat([phishurl,legiurl])
+
+data = data.sample(frac=1).reset_index(drop=True)
+data
+
+cols = list(data.columns.values) #Make a list of all of the columns in the df
+cols.pop(cols.index('url')) #Remove b from list
+cols.pop(cols.index('label')) #Remove x from list
+data = data[cols+['label','url']] #Create new dataframe with columns in the order you want
+
+cols.clear()
+
+session = sagemaker.Session()
+
+role = get_execution_role()
+
+# Define tokenizer
+#   The purpose of a tokenizer is to separate the features from the raw data
+
+
+def tokenizer(url):
+  """Separates feature words from the raw data
+  Keyword arguments:
+    url ---- The full URL
+    
+  :Returns -- The tokenized words; returned as a list
+  """
+  
+  # Split by slash (/) and dash (-)
+  tokens = re.split('[/-]', url)
+  
+  for i in tokens:
+    # Include the splits extensions and subdomains
+    if i.find(".") >= 0:
+      dot_split = i.split('.')
+      
+      # Remove .com and www. since they're too common
+      if "com" in dot_split:
+        dot_split.remove("com")
+      if "www" in dot_split:
+        dot_split.remove("www")
+      
+      tokens += dot_split
+      
+  return tokens
+    
+print("\n### Tokenizer defined ###\n")
+
+test_url = data['url'][100]
+print("\n- Full URL -\n")
+print(test_url)
+
+# Tokenize test URL
+print("\n- Tokenized Output -\n")
+tokenized_url = tokenizer(test_url)
+print(tokenized_url)
+
+
+tf_idf = TfidfVectorizer(tokenizer=tokenizer)
+tf_idf_vector  = pd.DataFrame(tf_idf.fit_transform(data['url']).todense())
+data['label'] = label_binarize(data['label'], classes=['good', 'bad'])
+
+X_train, X_test, y_train, y_test = train_test_split(tf_idf_vector, data['label'], test_size=0.3, random_state=0)
+X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=0.3, random_state=0)
+
+s3_bucket = sagemaker.Session().default_bucket()
+s3_prefix = 'spam-data' #prefix used for data stored within the bucket
+s3_path = 's3://{}/{}/'.format(s3_bucket, s3_prefix)
+
+import os
+data_dir = 'data'
+if not os.path.exists(data_dir):
+    os.makedirs(data_dir)
+    
+import scipy.sparse
+# scipy.sparse.save_npz(os.path.join(data_dir, 'test_data.csv'), X_test)
+X_test.to_csv(os.path.join(data_dir, 'test_data.csv'), header=False, index=False)
+pd.concat([y_train, X_train], axis=1).to_csv(os.path.join(data_dir, 'train_data.csv'), header=False, index=False)
+pd.concat([y_val, X_val], axis=1).to_csv(os.path.join(data_dir, 'val_data.csv'), header=False, index=False)
+
+test_path = session.upload_data(os.path.join(data_dir, 'test_data.csv'), key_prefix = s3_prefix)
+train_path = session.upload_data(os.path.join(data_dir, 'train_data.csv'), key_prefix = s3_prefix)
+val_path = session.upload_data(os.path.join(data_dir, 'val_data.csv'), key_prefix = s3_prefix)
+
+from sagemaker.amazon.amazon_estimator import get_image_uri
+container = get_image_uri(session.boto_region_name, 'xgboost','1.0-1')
+# container = get_image_uri(boto3.Session().region_name, 'xgboost')
+
+output_path = s3_path + 'model_output'
+output_path
+
+hyperparameters ={
+"max_depth": 5,
+"eta": 0.2,
+"gamma": 2,
+"min_child_weight": 5,
+"subsample": 0.8,
+"objective": "binary:logistic",
+"early_stopping_rounds": 25,
+"num_round": 150,
+}
+
+## get estimator
+classifier = sagemaker.estimator.Estimator(
+            container,
+            role,
+            train_instance_count=1,
+            train_instance_type='ml.m4.xlarge',
+            output_path=output_path,
+            sagemaker_session=session)
+## set hyperparameters
+classifier.set_hyperparameters(**hyperparameters)
+
+s3_train = sagemaker.s3_input(s3_data=train_path, content_type='csv')
+s3_val = sagemaker.s3_input(s3_data=val_path, content_type='csv')
+classifier.fit({
+               'train':s3_train,
+               'validation':s3_val,
+               })
+               
+               
+classifier_transformer = classifier.transformer(instance_count=1, instance_type='ml.m4.xlarge')
+
+classifier_transformer.transform(test_path, content_type='text/csv', split_type='Line')
+
+classifier_transformer.wait()
+
+!aws s3 cp --recursive $classifier_transformer.output_path $data_dir
+predictions = pd.read_csv(os.path.join(data_dir, 'test_data.csv.out'), header=None)
+predictions = [round(num) for num in predictions.squeeze().values]
+
+from sklearn.metrics import accuracy_score
+accuracy_score(y_test, predictions)
+
+xgb_predictor = classifier.deploy(initial_instance_count=1,instance_type='ml.m4.xlarge')
+
+
+
