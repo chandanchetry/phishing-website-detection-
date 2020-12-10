@@ -110,6 +110,10 @@ tf_idf = TfidfVectorizer(tokenizer=tokenizer)
 tf_idf_vector  = pd.DataFrame(tf_idf.fit_transform(data['url']).todense())
 data['label'] = label_binarize(data['label'], classes=['good', 'bad'])
 
+##vectorizing our data
+count_vec = TfidfVectorizer(tokenizer=tokenizer)
+count_vector  = pd.DataFrame(count_vec.fit_transform(data['url']).todense())
+
 ##spliting the data using Train/Test split
 X_train, X_test, y_train, y_test = train_test_split(tf_idf_vector, data['label'], test_size=0.3, random_state=0)
 X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=0.3, random_state=0)
@@ -199,33 +203,74 @@ accuracy_score(y_test, predictions)
 xgb_predictor = classifier.deploy(initial_instance_count=1,instance_type='ml.m4.xlarge')
 
 
-##code to create ROC curve for visualization 
-from sklearn import metrics
-import numpy as np
-import matplotlib.pyplot as plt
-from sklearn.metrics import accuracy_score
-from sklearn.metrics import roc_auc_score
-from sagemaker.predictor import csv_serializer
-from sklearn import metrics
-
-auc = 0.9316666666666666
-print('AUC is ' + repr(auc))
-
-y_pred = predictions
-y_true = test_data['label']
+#tfidf
+from sklearn.metrics import classification_report ,accuracy_score,roc_curve,auc
+from sklearn.metrics import plot_confusion_matrix
+accuracy=accuracy_score(y_test_tfidf,predictions)
+print(accuracy)
 
 
+#tfidf
+print(classification_report(y_test_tfidf,predictions))
 
-fpr, tpr, _ = metrics.roc_curve(y_true, y_pred)
 
-plt.title('ROC Curve')
-plt.plot(fpr, tpr, 'b',
-label='AUC = %0.2f'% auc)
-plt.legend(loc='lower right')
-plt.plot([0,1],[0,1],'r--')
-plt.xlim([-0.1,1.1])
-plt.ylim([-0.1,1.1])
-plt.ylabel('True Positive Rate')
-plt.xlabel('False Positive Rate')
-plt.show()
+#tfidf
+%matplotlib inline
+from matplotlib import pyplot as plt
+
+#tfidf
+from sklearn.metrics import roc_curve,roc_auc_score
+
+fpr , tpr , thresholds = roc_curve ( y_test_tfidf,predictions)
+
+
+#tfidf
+def plot_roc_curve(fpr,tpr): 
+  plt.plot(fpr,tpr) 
+  plt.axis([0,1,0,1]) 
+  plt.xlabel('False Positive Rate') 
+  plt.ylabel('True Positive Rate') 
+  plt.show()    
+  
+plot_roc_curve (fpr,tpr) 
+
+
+#tfidf
+auc_score=roc_auc_score(y_test,predictions) 
+print(auc_score)
+
+#cv
+from sklearn.metrics import classification_report ,accuracy_score,roc_curve,auc
+from sklearn.metrics import plot_confusion_matrix
+print(classification_report(y_test,predictions))
+
+#cv
+from sklearn.metrics import confusion_matrix
+cm=confusion_matrix(y_test,predictions)
+print(cm)
+
+
+#cv
+%matplotlib inline
+from matplotlib import pyplot as plt
+from sklearn.metrics import roc_curve,roc_auc_score
+
+fpr , tpr , thresholds = roc_curve ( y_test,predictions)
+
+#cv
+def plot_roc_curve(fpr,tpr): 
+  plt.plot(fpr,tpr) 
+  plt.axis([0,1,0,1]) 
+  plt.xlabel('False Positive Rate') 
+  plt.ylabel('True Positive Rate') 
+  plt.show()    
+  
+plot_roc_curve (fpr,tpr) 
+
+#cv
+auc_score=roc_auc_score(y_test,predictions) 
+print(auc_score)
+
+
+
 
